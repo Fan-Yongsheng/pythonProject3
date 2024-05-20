@@ -1,113 +1,91 @@
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
 import pandas as pd
 
+def normalize_url(url):
+    parsed_url = urlparse(url)
+    normalized_url = parsed_url._replace(path=parsed_url.path.rstrip('/'))
+    return normalized_url.geturl()
 
+def get_links(url, root_url, visited, links_info, current_id, max_links, url_to_id):
+    # 标准化URL
+    url = normalize_url(url)
 
-def get_links(url, root_url, visited, max_links, parent=None):
     # 检查是否达到了链接数量的限制
-    if len(visited) >= max_links:
-        return []
+    if len(url_to_id) >= max_links:
+        return current_id
 
-    # 检查URL是否已被访问
-    if url in visited:
-        return []
-    print(f"Visiting {url}")
+    # 如果URL已被访问，直接返回其ID
+    if url in url_to_id:
+        return current_id
+
+    # 将当前URL标记为已访问，并分配ID
+    url_to_id[url] = current_id
     visited.add(url)
-
+    print(f"Visiting {url} as ID {current_id}")
 
     try:
         content = requests.get(url).text
     except requests.RequestException as e:
         print(f"Error visiting {url}: {e}")
-        return []
-
+        return current_id
 
     soup = BeautifulSoup(content, 'html.parser')
-    page_links = []
+    child_links = []
 
     # 遍历页面中的所有链接
     for link in soup.find_all('a'):
         href = link.get('href')
         if href:
-            # 完整的URL
+            # 生成完整的URL
             if not href.startswith('http'):
-                href = requests.compat.urljoin(url, href)
-            if 'www.hs-hannover.de' in href and href not in visited:
+                href = urljoin(url, href)
+            href = normalize_url(href)
+            if 'www.hs-hannover.de' in href:
+                child_links.append(href)
 
-                page_links.append((href, url))
+    # 存储当前链接及其子链接
+    links_info.append((current_id, url, child_links))
 
-                if len(visited) < max_links:
-                    page_links.extend(get_links(href, root_url, visited, max_links, url))
+    # 分配ID并递归爬取子链接
+    for child in child_links:
+        if child not in url_to_id:
+            current_id += 1
+            current_id = get_links(child, root_url, visited, links_info, current_id, max_links, url_to_id)
 
-    return page_links
+    return current_id
 
+def create_excel(links_info, url_to_id):
+    data = []
+    seen_ids = set()  # 记录已经输出的ID
+    for id, url, children in links_info:
+        if id not in seen_ids:
+            parent_link = f"{id}: {url}"
+            data.append([parent_link, ""])  # Add parent link
+            seen_ids.add(id)
+        for child in children:
+            child_id = url_to_id[child]
+            if child_id not in seen_ids:
+                child_link = f"{child_id}: {child}"
+                data.append(["", child_link])  # Add child link
+                seen_ids.add(child_id)
+
+    df = pd.DataFrame(data, columns=["Parent Link (ID URL)", "Child Link (ID URL)"])
+    excel_file_name = 'hs_hannover_links.xlsx'
+    df.to_excel(excel_file_name, index=False)
+    print("Excel file created at:", excel_file_name)
 
 # 根URL
 root_url = 'http://www.hs-hannover.de'
-# www, / , gleiche LINK,
 
 visited_links = set()
-max_links = 10  # 最大爬取链接数量
+links_info = []
+url_to_id = {}
+max_links = 50  # 最大爬取链接数量
+current_id = 1  # 初始链接编号
 
-links_with_parents = get_links(root_url, root_url, visited_links, max_links)
+get_links(root_url, root_url, visited_links, links_info, current_id, max_links, url_to_id)
 
-
-df_links = pd.DataFrame(links_with_parents, columns=['URL', 'Parent URL'])
-
-
-excel_file_name = 'hs_hannover_links.xlsx'
-
-
-df_links.to_excel(excel_file_name, index=False)
-
-import networkx as nx
-import matplotlib.pyplot as plt
-
-
-
-from pyvis.network import Network
-import pandas as pd
-
-df_links = pd.DataFrame(links_with_parents, columns=['URL', 'Parent URL'])
-net = Network(height="750px", width="100%", bgcolor="#222222", font_color="white", notebook=True)
-
-# 添加节点和边
-for index, row in df_links.iterrows():
-    src = row['Parent URL'] if row['Parent URL'] else 'Root'
-    dst = row['URL']
-
-    # 直接添加节点，不检查是否已存在
-    net.add_node(src, label=src, title=src, color="#f7bb42")
-    net.add_node(dst, label=dst, title=dst, color="#dd4b39")
-    net.add_edge(src, dst)
-
-net.set_options("""
-    {
-      "physics": {
-        "forceAtlas2Based": {
-          "gravitationalConstant": -200,
-          "centralGravity": 0.002,
-          "springLength": 100,
-          "springConstant": 0.05,
-          "avoidOverlap": 1
-        },
-        "solver": "forceAtlas2Based",
-        "timestep": 0.35,
-        "stabilization": {
-          "iterations": 150
-        }
-      },
-      "nodes": {
-        "scaling": {
-          "min": 10,
-          "max": 30,
-          "label": {
-            "enabled": true
-          }
-        }
-      }
-    }
-    """)
-
-net.show("hs_hannover_network.html")
+# 保存到Excel文件
+create_excel(links_info, url_to_id)
