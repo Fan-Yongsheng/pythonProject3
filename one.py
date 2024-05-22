@@ -77,7 +77,7 @@ def create_excel(links_info, url_to_id):
     print("Excel file created at:", excel_file_name)
 
 # 根URL
-root_url = 'http://www.hs-hannover.de'
+root_url = 'https://www.hs-hannover.de'
 
 visited_links = set()
 links_info = []
